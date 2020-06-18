@@ -32,6 +32,7 @@ setup(
 		'python-dateutil==2.8.1',
 		'requests==2.22.0',
 		'Pillow==7.0.0',
+		'psycopg2==2.8.5',
 	],
 	entry_points={
 		'console_scripts': ['nemo=NEMO.provisioning:entry_point'],

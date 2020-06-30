@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
 	name='NEMO',
-	version='2.3.4',
+	version='3.0.0',
 	python_requires='>=3.6',
 	packages=find_packages(exclude=['NEMO.tests','NEMO.tests.*']),
 	include_package_data=True,
@@ -33,6 +33,7 @@ setup(
 		'requests==2.22.0',
 		'Pillow==7.0.0',
 		'psycopg2==2.8.5',
+		'django-mptt==0.11.0',
 	],
 	entry_points={
 		'console_scripts': ['nemo=NEMO.provisioning:entry_point'],

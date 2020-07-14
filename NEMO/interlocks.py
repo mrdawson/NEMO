@@ -265,11 +265,11 @@ class ProXrInterlock(Interlock):
 			with socket.create_connection((interlock.card.server, interlock.card.port), 10) as relay_socket:
 				if command_type == Interlock_model.State.LOCKED:
 					# turn the interlock channel off
-					self._send_bytes(relay_socket, (254, 99 + interlock.channel, 1))
+					self._send_bytes(relay_socket, (254, 129, 1))
 					state = self._get_state(relay_socket, interlock.channel)
 				elif command_type == Interlock_model.State.UNLOCKED:
 					# turn the interlock channel on
-					self._send_bytes(relay_socket, (254, 107 + interlock.channel, 1))
+					self._send_bytes(relay_socket, (254, 130, 1))
 					state = self._get_state(relay_socket, interlock.channel)
 		except Exception as error:
 			raise InterlockError(interlock=interlock, msg="Communication error: " + str(error))

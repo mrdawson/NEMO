@@ -1,5 +1,5 @@
 import io
-from collections import Iterable, defaultdict
+from collections import Iterable
 from copy import deepcopy
 from datetime import timedelta, datetime
 from http import HTTPStatus
@@ -22,7 +22,7 @@ from NEMO.models import Tool, Reservation, Configuration, UsageEvent, AreaAccess
 from NEMO.utilities import bootstrap_primary_color, extract_times, extract_dates, format_datetime, parse_parameter_string, send_mail, create_email_attachment, localize
 from NEMO.views.constants import ADDITIONAL_INFORMATION_MAXIMUM_LENGTH
 from NEMO.views.customization import get_customization, get_media_file_contents
-from NEMO.views.policy import check_policy_to_save_reservation, check_policy_to_cancel_reservation, check_policy_to_create_outage
+from NEMO.views.policy import check_policy_to_save_reservation, check_policy_to_cancel_reservation, check_policy_to_create_outage, maximum_users_in_overlapping_reservations
 
 calendar_logger = getLogger(__name__)
 
@@ -102,7 +102,7 @@ def calendar(request, item_type=None, item_id=None):
 @require_GET
 @disable_session_expiry_refresh
 def event_feed(request):
-	""" Get all reservations for a specific time-window. Optionally: filter by tool or user name. """
+	""" Get all reservations for a specific time-window. Optionally: filter by tool, area or user name. """
 	try:
 		start, end = extract_dates(request.GET)
 	except Exception as e:
@@ -183,25 +183,26 @@ def usage_event_feed(request, start, end):
 	if item_id and item_type == ReservationItemType.TOOL:
 		usage_events = usage_events.filter(tool__id__in=Tool.objects.get(pk=item_id).get_family_tool_ids())
 
-	area_access_events = None
+	area_access_events = AreaAccessRecord.objects.none()
 	# Filter events that only have to do with the current user.
 	personal_schedule = request.GET.get('personal_schedule')
 	if personal_schedule:
 		usage_events = usage_events.filter(user=request.user)
 		# Display area access along side tool usage when 'personal schedule' is selected.
 		area_access_events = AreaAccessRecord.objects.filter(customer__id=request.user.id)
-		area_access_events = area_access_events.exclude(start__lt=start, end__lt=start)
-		area_access_events = area_access_events.exclude(start__gt=end, end__gt=end)
+	if item_id and item_type == ReservationItemType.AREA:
+		area_access_events = AreaAccessRecord.objects.filter(area__id=item_id)
+	area_access_events = area_access_events.exclude(start__lt=start, end__lt=start)
+	area_access_events = area_access_events.exclude(start__gt=end, end__gt=end)
 
-	missed_reservations = None
+	missed_reservations = Reservation.objects.none()
 	if personal_schedule:
 		missed_reservations = Reservation.objects.filter(missed=True, user=request.user)
 	elif item_type:
 		reservation_filter = {item_type.value: item_id}
 		missed_reservations = Reservation.objects.filter(missed=True).filter(**reservation_filter)
-	if missed_reservations:
-		missed_reservations = missed_reservations.exclude(start__lt=start, end__lt=start)
-		missed_reservations = missed_reservations.exclude(start__gt=end, end__gt=end)
+	missed_reservations = missed_reservations.exclude(start__lt=start, end__lt=start)
+	missed_reservations = missed_reservations.exclude(start__gt=end, end__gt=end)
 
 	dictionary = {
 		'usage_events': usage_events,
@@ -347,10 +348,10 @@ def reservation_success(request, reservation: Reservation):
 			overlapping_reservations_in_same_area = overlapping_reservations_in_same_area.filter(tool__in=Tool.objects.filter(_requires_area_access=area))
 		elif reservation.reservation_item_type == ReservationItemType.AREA:
 			overlapping_reservations_in_same_area = overlapping_reservations_in_same_area.filter(area=area)
-		max_area_overlap, max_area_time = maximum_overlap_users(overlapping_reservations_in_same_area)
+		max_area_overlap, max_area_time = maximum_users_in_overlapping_reservations(overlapping_reservations_in_same_area)
 		if location:
 			overlapping_reservations_in_same_location = overlapping_reservations_in_same_area.filter(tool__in=Tool.objects.filter(_location=location))
-			max_location_overlap, max_location_time = maximum_overlap_users(overlapping_reservations_in_same_location)
+			max_location_overlap, max_location_time = maximum_users_in_overlapping_reservations(overlapping_reservations_in_same_location)
 	if max_area_overlap and max_area_overlap >= area.warning_capacity():
 		dictionary = {
 			'area': area,
@@ -917,11 +918,14 @@ def cancel_the_reservation(reservation: Reservation, user_cancelling_reservation
 			email_contents = get_media_file_contents('cancellation_email.html')
 			if email_contents:
 				cancellation_email = Template(email_contents).render(Context(dictionary))
-				if getattr(reservation.user.preferences, 'attach_cancelled_reservation', False):
+				recipients = [reservation.user.email]
+				if reservation.area:
+					recipients.extend(reservation.area.reservation_email_list())
+				if reservation.user.get_preferences().attach_cancelled_reservation:
 					attachment = create_ics_for_reservation(reservation, cancelled=True)
-					reservation.user.email_user('Your reservation was cancelled', cancellation_email, user_cancelling_reservation.email, [attachment])
+					send_mail('Your reservation was cancelled', cancellation_email, user_cancelling_reservation.email, recipients, [attachment])
 				else:
-					reservation.user.email_user('Your reservation was cancelled', cancellation_email, user_cancelling_reservation.email)
+					send_mail('Your reservation was cancelled', cancellation_email, user_cancelling_reservation.email, recipients)
 
 		else:
 			''' here the user cancelled his own reservation so notify him '''
@@ -946,17 +950,21 @@ def send_out_of_time_reservation_notification(reservation:Reservation):
 	subject = "Out of time in the " + str(reservation.area.name)
 	message = get_media_file_contents('out_of_time_reservation_email.html')
 	user_office_email = get_customization('user_office_email_address')
-	abuse_email = get_customization('abuse_email_address')
 	if message and user_office_email:
 		message = Template(message).render(Context({'reservation': reservation}))
-		send_mail(subject, message, user_office_email, [reservation.user.email, abuse_email, user_office_email])
+		recipients = [reservation.user.email]
+		recipients.extend(reservation.area.abuse_email_list())
+		send_mail(subject, message, user_office_email, recipients)
 	else:
 		calendar_logger.error("Out of time reservation email couldn't be send because out_of_time_reservation_email.html or user_office_email are not defined")
 
 
 def send_user_created_reservation_notification(reservation: Reservation):
 	site_title = get_customization('site_title')
-	if getattr(reservation.user.preferences, 'attach_created_reservation', False):
+	recipients = [reservation.user.email] if reservation.user.get_preferences().attach_created_reservation else []
+	if reservation.area:
+		recipients.extend(reservation.area.reservation_email_list())
+	if recipients:
 		subject = f"[{site_title}] Reservation for the " + str(reservation.reservation_item)
 		message = get_media_file_contents('reservation_created_user_email.html')
 		message = Template(message).render(Context({'reservation': reservation}))
@@ -964,14 +972,17 @@ def send_user_created_reservation_notification(reservation: Reservation):
 		# We don't need to check for existence of reservation_created_user_email because we are attaching the ics reservation and sending the email regardless (message will be blank)
 		if user_office_email:
 			attachment = create_ics_for_reservation(reservation)
-			reservation.user.email_user(subject, message, user_office_email, [attachment])
+			send_mail(subject, message, user_office_email, recipients, [attachment])
 		else:
 			calendar_logger.error("User created reservation notification could not be send because user_office_email_address is not defined")
 
 
 def send_user_cancelled_reservation_notification(reservation: Reservation):
 	site_title = get_customization('site_title')
-	if getattr(reservation.user.preferences, 'attach_cancelled_reservation', False):
+	recipients = [reservation.user.email] if reservation.user.get_preferences().attach_cancelled_reservation else []
+	if reservation.area:
+		recipients.extend(reservation.area.reservation_email_list())
+	if recipients:
 		subject = f"[{site_title}] Cancelled Reservation for the " + str(reservation.reservation_item)
 		message = get_media_file_contents('reservation_cancelled_user_email.html')
 		message = Template(message).render(Context({'reservation': reservation}))
@@ -979,7 +990,7 @@ def send_user_cancelled_reservation_notification(reservation: Reservation):
 		# We don't need to check for existence of reservation_cancelled_user_email because we are attaching the ics reservation and sending the email regardless (message will be blank)
 		if user_office_email:
 			attachment = create_ics_for_reservation(reservation, cancelled=True)
-			reservation.user.email_user(subject, message, user_office_email, [attachment])
+			send_mail(subject, message, user_office_email, recipients, [attachment])
 		else:
 			calendar_logger.error("User cancelled reservation notification could not be send because user_office_email_address is not defined")
 
@@ -1003,54 +1014,3 @@ def create_ics_for_reservation(reservation: Reservation, cancelled=False):
 	filename = 'cancelled_reservation.ics' if cancelled else 'reservation.ics'
 
 	return create_email_attachment(ics, filename)
-
-
-def maximum_overlap_users(reservations: List[Reservation]) -> (int, datetime):
-	"""
-	Returns the maximum number of overlapping reservations and the earlier time the maximum is reached
-	This will only count reservations made by different users. i.e. if a user has 3 reservations at the same
-	time for different tools, it will only count as one.
-	"""
-	# First we need to merge reservations by user, since one user could have more than one at the same time. (and we should only count it as one)
-	intervals_by_user = defaultdict(list)
-	for r in reservations:
-		intervals_by_user[r.user.id].append((r.start, r.end))
-
-	merged_intervals = []
-	for user, intervals in intervals_by_user.items():
-		merged_intervals.extend(recursive_merge(sorted(intervals).copy()))
-
-	# Now let's count the maximum overlapping reservations
-	times = []
-	for interval in merged_intervals:
-		start_time, end_time = interval[0], interval[1]
-		times.append((start_time, 'start'))
-		times.append((end_time, 'end'))
-	times = sorted(times)
-
-	count = 0
-	max_count = 0
-	max_time = None
-	for time in times:
-		if time[1] == 'start':
-			count += 1  # increment on arrival/start
-		else:
-			count -= 1  # decrement on departure/end
-		# maintain maximum
-		prev_count = max_count
-		max_count = max(count, max_count)
-		# maintain earlier time max is reached
-		if max_count > prev_count:
-			max_time = time[0]
-	return max_count, max_time
-
-
-def recursive_merge(intervals: List[tuple], start_index=0) -> List[tuple]:
-	for i in range(start_index, len(intervals) - 1):
-		if intervals[i][1] > intervals[i + 1][0]:
-			new_start = intervals[i][0]
-			new_end = intervals[i + 1][1]
-			intervals[i] = (new_start, new_end)
-			del intervals[i + 1]
-			return recursive_merge(intervals.copy(), start_index=i)
-	return intervals

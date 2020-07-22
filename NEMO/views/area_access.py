@@ -18,7 +18,7 @@ from NEMO.exceptions import NoAccessiblePhysicalAccessUserError, UnavailableReso
 	NoActiveProjectsForUserError, NoPhysicalAccessUserError, PhysicalAccessExpiredUserError, \
 	MaximumCapacityReachedError, ReservationRequiredUserError, ScheduledOutageInProgressError
 from NEMO.models import Area, AreaAccessRecord, Project, User
-from NEMO.utilities import parse_start_and_end_date
+from NEMO.utilities import parse_start_and_end_date, quiet_int
 from NEMO.views.calendar import shorten_reservation
 from NEMO.views.customization import get_customization
 from NEMO.views.policy import check_policy_to_enter_this_area, check_policy_to_enter_any_area
@@ -227,7 +227,7 @@ def calendar_self_login(request):
 		# We have not selected a project yet
 		return render(request, 'area_access/calendar_self_login.html', dictionary)
 	response = self_log_in(request=request, load_areas=False)
-	if response.status_code == 302 and response.url == '/':
+	if response.status_code == 302 and response.url == reverse('landing'):
 		# We got redirect to landing page in return, which means it was successful
 		return HttpResponse()
 	elif response and response.content:
@@ -247,6 +247,9 @@ def self_log_in(request, load_areas=True):
 	dictionary = {
 		'projects': user.active_projects(),
 	}
+	if request.GET.get('area_id'):
+		dictionary['area_id'] = quiet_int(request.GET['area_id'])
+
 	facility_name = get_customization('facility_name')
 	try:
 		check_policy_to_enter_any_area(user)
@@ -365,7 +368,7 @@ def load_areas_for_use_in_template(user: User = None):
 	The template view needs to use the {% recursetree %} tag from mptt
 	"""
 	accessible_areas = user.accessible_areas() if user else Area.objects.filter(requires_reservation=True)
-	areas = [ancestor for area in accessible_areas for ancestor in area.get_ancestors(include_self=True)]
+	areas = list(set([ancestor for area in accessible_areas for ancestor in area.get_ancestors(include_self=True)]))
 	areas.sort(key=lambda x: x.tree_category())
 	areas = Area.objects.filter(id__in=[area.id for area in areas])
 	return accessible_areas, areas

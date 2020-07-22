@@ -15,7 +15,6 @@ from NEMO.views import abuse, accounts_and_projects, alerts, api, area_access, a
 
 logger = logging.getLogger(__name__)
 
-
 if apps.is_installed("django.contrib.admin"):
 	# Use our custom login page instead of Django's built-in one.
 	admin.site.login = login_required(admin.site.login)
@@ -38,6 +37,7 @@ urlpatterns = [
 	# Authentication & error pages:
 	url(r'^login/$', authentication.login_user, name='login'),
 	url(r'^logout/$', authentication.logout_user, name='logout'),
+	url(r'^impersonate/$', authentication.impersonate, name='impersonate'),
 	url(r'^authorization_failed/$', authentication.authorization_failed, name='authorization_failed'),
 
 	# Root URL defaults to the calendar page on desktop systems, and the mobile homepage for mobile devices:
@@ -204,6 +204,8 @@ urlpatterns = [
 if settings.ALLOW_CONDITIONAL_URLS:
 	urlpatterns += [
 		url(r'^admin/', admin.site.urls),
+
+		# REST API
 		url(r'^api/', include(router.urls)),
 		url(r'^api/billing/?$', api.billing),
 
@@ -235,8 +237,8 @@ if settings.ALLOW_CONDITIONAL_URLS:
 		url(r'^toggle_active/(?P<kind>account|project)/(?P<identifier>\d+)/$', accounts_and_projects.toggle_active, name='toggle_active'),
 		url(r'^create_project/$', accounts_and_projects.create_project, name='create_project'),
 		url(r'^create_account/$', accounts_and_projects.create_account, name='create_account'),
-		url(r'^remove_user/(?P<user_id>\d+)/from_project/(?P<project_id>\d+)/$', accounts_and_projects.remove_user_from_project, name='remove_user_from_project'),
-		url(r'^add_user/(?P<user_id>\d+)/to_project/(?P<project_id>\d+)/$', accounts_and_projects.add_user_to_project, name='add_user_to_project'),
+		url(r'^remove_user_from_project/$', accounts_and_projects.remove_user_from_project, name='remove_user_from_project'),
+		url(r'^add_user_to_project/$', accounts_and_projects.add_user_to_project, name='add_user_to_project'),
 
 		# Account, project, and user history
 		url(r'^history/(?P<item_type>account|project|user)/(?P<item_id>\d+)/$', history.history, name='history'),

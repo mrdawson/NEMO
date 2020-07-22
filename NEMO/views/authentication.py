@@ -173,7 +173,7 @@ class LDAPAuthenticationBackend(ModelBackend):
 						c.unbind()
 
 				# let's proceed with binding using the user trying to authenticate
-				c = Connection(s, user=ldap_bind_user, password=password, auto_bind=False, authentication=SIMPLE, raise_exceptions=True)
+				c = Connection(s, user=ldap_bind_user, password=password, auto_bind=auto_bind, authentication=SIMPLE, raise_exceptions=True)
 				c.unbind()
 				# At this point the user successfully authenticated to at least one LDAP server.
 				is_authenticated_with_ldap = True
